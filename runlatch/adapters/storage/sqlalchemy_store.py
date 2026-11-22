@@ -5,10 +5,12 @@ Imports ONLY Python stdlib, sqlalchemy, runlatch.core.*, and runlatch.adapters.s
 
 from __future__ import annotations
 
-from typing import Literal, cast
-from uuid import UUID
+from datetime import UTC, datetime
+from typing import Any, Literal, cast
+from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -20,11 +22,17 @@ from sqlalchemy.pool import NullPool
 from runlatch.adapters.storage.models import (
     ApprovalRequestModel,
     Base,
+    NotificationDeliveryModel,
     RunStepModel,
     ToolCallModel,
+    WebhookEventModel,
     WorkflowRunModel,
 )
-from runlatch.core.exceptions import RunLatchError
+from runlatch.core.exceptions import (
+    ApprovalAlreadyDecidedError,
+    ApprovalExpiredError,
+    RunLatchError,
+)
 from runlatch.core.types import (
     ApprovalRequestRecord,
     ApprovalStatus,
@@ -40,6 +48,12 @@ from runlatch.core.types import (
     WorkspaceMeta,
     utc_now,
 )
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class SQLAlchemyCheckpointStore:
@@ -404,8 +418,13 @@ class SQLAlchemyCheckpointStore:
         decided_by: str,
         reason: str = "",
     ) -> ApprovalRequestRecord:
-        """Atomically transition a PENDING approval using SELECT ... FOR UPDATE."""
+        """Atomically transition a PENDING approval via SELECT FOR UPDATE + conditional UPDATE."""
         await self.initialize()
+        now = utc_now()
+        new_status = (
+            ApprovalStatus.APPROVED.value if approved else ApprovalStatus.REJECTED.value
+        )
+
         async with self._session_factory() as session:
             async with session.begin():
                 stmt = (
@@ -417,13 +436,224 @@ class SQLAlchemyCheckpointStore:
                 if row is None:
                     raise RunLatchError(f"Approval request {approval_id} not found.")
                 if row.status != ApprovalStatus.PENDING.value:
-                    raise RunLatchError(
+                    raise ApprovalAlreadyDecidedError(
                         f"Approval {approval_id} already decided with status '{row.status}'."
                     )
-                row.status = (
-                    ApprovalStatus.APPROVED.value if approved else ApprovalStatus.REJECTED.value
+                if _ensure_utc(row.expires_at) < now:
+                    row.status = ApprovalStatus.EXPIRED.value
+                    raise ApprovalExpiredError(
+                        f"Approval {approval_id} expired at {row.expires_at.isoformat()}."
+                    )
+
+                # Atomic conditional UPDATE guarantees single-winner even on SQLite
+                upd = (
+                    update(ApprovalRequestModel)
+                    .where(
+                        ApprovalRequestModel.id == approval_id,
+                        ApprovalRequestModel.status == ApprovalStatus.PENDING.value,
+                    )
+                    .values(
+                        status=new_status,
+                        decided_by=decided_by,
+                        decision_reason=reason,
+                        decided_at=now,
+                    )
                 )
-                row.decided_by = decided_by
-                row.decision_reason = reason
-                row.decided_at = utc_now()
+                result = await session.execute(upd)
+                rowcount = getattr(result, "rowcount", 1)
+                if rowcount == 0:
+                    raise ApprovalAlreadyDecidedError(
+                        f"Approval {approval_id} was concurrently decided by another request."
+                    )
+
+                await session.refresh(row)
                 return self._row_to_approval(row)
+
+    async def expire_stale_approvals(self) -> list[ApprovalRequestRecord]:
+        """Mark PENDING approvals past their expires_at as EXPIRED and cancel their runs."""
+        await self.initialize()
+        now = utc_now()
+        expired_records: list[ApprovalRequestRecord] = []
+        async with self._session_factory() as session:
+            async with session.begin():
+                stmt = select(ApprovalRequestModel).where(
+                    ApprovalRequestModel.status == ApprovalStatus.PENDING.value
+                )
+                rows = (await session.scalars(stmt)).all()
+                for row in rows:
+                    if _ensure_utc(row.expires_at) < now:
+                        row.status = ApprovalStatus.EXPIRED.value
+                        row.decided_at = now
+                        row.decision_reason = "Approval timed out"
+                        expired_records.append(self._row_to_approval(row))
+                        run_row = await session.get(WorkflowRunModel, row.run_id)
+                        if run_row and run_row.status == RunStatus.WAITING_APPROVAL.value:
+                            run_row.status = RunStatus.CANCELLED.value
+                            run_row.error_message = "Cancelled due to expired HITL approval."
+                            run_row.completed_at = now
+                            run_row.updated_at = now
+        return expired_records
+
+    async def record_webhook_event(
+        self,
+        *,
+        provider: str,
+        delivery_id: str,
+        event_type: str,
+        repository: str | None,
+        payload: dict[str, Any],
+        status: str,
+        triggered_run_id: UUID | None = None,
+    ) -> bool:
+        """Persist a webhook event. Returns False if delivery_id already exists (duplicate)."""
+        await self.initialize()
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    existing = (
+                        await session.scalars(
+                            select(WebhookEventModel).where(
+                                WebhookEventModel.delivery_id == delivery_id
+                            )
+                        )
+                    ).first()
+                    if existing is not None:
+                        return False
+                    session.add(
+                        WebhookEventModel(
+                            id=uuid4(),
+                            provider=provider,
+                            delivery_id=delivery_id,
+                            event_type=event_type,
+                            repository=repository,
+                            payload=payload,
+                            status=status,
+                            triggered_run_id=triggered_run_id,
+                            received_at=utc_now(),
+                        )
+                    )
+            return True
+        except IntegrityError:
+            return False
+
+    async def create_notification_delivery(
+        self,
+        *,
+        run_id: UUID | None,
+        event_type: str,
+        channel: str,
+        target: str,
+        status: str = "PENDING",
+    ) -> UUID:
+        """Create an initial notification_deliveries audit row."""
+        await self.initialize()
+        delivery_id = uuid4()
+        async with self._session_factory() as session:
+            async with session.begin():
+                session.add(
+                    NotificationDeliveryModel(
+                        id=delivery_id,
+                        run_id=run_id,
+                        event_type=event_type,
+                        channel=channel,
+                        target=target,
+                        status=status,
+                        attempt_count=0,
+                        created_at=utc_now(),
+                    )
+                )
+        return delivery_id
+
+    async def update_notification_delivery(
+        self,
+        delivery_id: UUID,
+        *,
+        status: str,
+        attempt_count: int,
+        provider_message_id: str | None = None,
+        last_error: str | None = None,
+    ) -> None:
+        """Update a notification_deliveries row after a delivery attempt."""
+        await self.initialize()
+        async with self._session_factory() as session:
+            async with session.begin():
+                row = await session.get(NotificationDeliveryModel, delivery_id)
+                if row is not None:
+                    row.status = status
+                    row.attempt_count = attempt_count
+                    row.provider_message_id = provider_message_id
+                    row.last_error = last_error
+                    if status == "SENT":
+                        row.sent_at = utc_now()
+
+    async def list_notification_deliveries(
+        self, *, run_id: UUID | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return notification delivery audit records."""
+        await self.initialize()
+        async with self._session_factory() as session:
+            stmt = select(NotificationDeliveryModel).order_by(
+                NotificationDeliveryModel.created_at.desc()
+            )
+            if run_id is not None:
+                stmt = stmt.where(NotificationDeliveryModel.run_id == run_id)
+            stmt = stmt.limit(limit)
+            rows = (await session.scalars(stmt)).all()
+            return [
+                {
+                    "id": str(r.id),
+                    "run_id": str(r.run_id) if r.run_id else None,
+                    "event_type": r.event_type,
+                    "channel": r.channel,
+                    "target": r.target,
+                    "status": r.status,
+                    "attempt_count": r.attempt_count,
+                    "provider_message_id": r.provider_message_id,
+                    "last_error": r.last_error,
+                    "sent_at": r.sent_at.isoformat() if r.sent_at else None,
+                    "created_at": r.created_at.isoformat(),
+                }
+                for r in rows
+            ]
+
+    async def get_metrics_summary(self) -> dict[str, Any]:
+        """Compute aggregate execution, token, and USD cost metrics across all runs."""
+        await self.initialize()
+        async with self._session_factory() as session:
+            rows = (await session.scalars(select(WorkflowRunModel))).all()
+            total_runs = len(rows)
+            by_status: dict[str, int] = {}
+            by_workflow: dict[str, dict[str, Any]] = {}
+            total_tokens = 0
+            total_cost = 0.0
+            completed_count = 0
+
+            for r in rows:
+                by_status[r.status] = by_status.get(r.status, 0) + 1
+                if r.status == RunStatus.COMPLETED.value:
+                    completed_count += 1
+                tok = r.total_input_tokens + r.total_output_tokens
+                cost = float(r.total_cost_usd)
+                total_tokens += tok
+                total_cost = round(total_cost + cost, 6)
+
+                wf_bucket = by_workflow.setdefault(
+                    r.workflow_name,
+                    {"runs": 0, "completed": 0, "tokens": 0, "cost_usd": 0.0},
+                )
+                wf_bucket["runs"] += 1
+                if r.status == RunStatus.COMPLETED.value:
+                    wf_bucket["completed"] += 1
+                wf_bucket["tokens"] += tok
+                wf_bucket["cost_usd"] = round(wf_bucket["cost_usd"] + cost, 6)
+
+            success_rate = round((completed_count / total_runs) * 100.0, 2) if total_runs else 0.0
+            return {
+                "total_runs": total_runs,
+                "completed_runs": completed_count,
+                "success_rate_pct": success_rate,
+                "total_tokens": total_tokens,
+                "total_cost_usd": total_cost,
+                "by_status": by_status,
+                "by_workflow": by_workflow,
+            }

@@ -225,12 +225,14 @@ class Agent:
             raise RunLatchError(f"Run {run_id} has no pending_tool_call to resume.")
 
         if checkpoint.pending_approval_id is not None:
-            await active_store.decide_approval(
-                checkpoint.pending_approval_id,
-                approved=approved,
-                decided_by=decided_by,
-                reason=reason,
-            )
+            existing_appr = await active_store.get_approval(checkpoint.pending_approval_id)
+            if existing_appr is not None and existing_appr.status == ApprovalStatus.PENDING:
+                await active_store.decide_approval(
+                    checkpoint.pending_approval_id,
+                    approved=approved,
+                    decided_by=decided_by,
+                    reason=reason,
+                )
 
         if (
             approved

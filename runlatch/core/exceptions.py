@@ -64,3 +64,11 @@ class ApprovalRequiredSignal(RunLatchError):
         self.run_id = run_id
         self.approval_id = approval_id
         self.tool_name = tool_name
+
+
+class ApprovalAlreadyDecidedError(RunLatchError):
+    """Raised when an approval request has already been approved or rejected (HTTP 409)."""
+
+
+class ApprovalExpiredError(RunLatchError):
+    """Raised when an approval request has passed its expiration timestamp (HTTP 410)."""

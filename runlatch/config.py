@@ -73,6 +73,22 @@ class RunLatchSettings(BaseSettings):
     gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
 
     database_url: str = "sqlite+aiosqlite:///./.runlatch.db"
+    redis_url: str = "redis://localhost:6379/0"
+    api_key: str = "dev-runlatch-api-key"
+    github_webhook_secret: str = "dev-github-webhook-secret"
+    approval_signing_secret: str = "dev-approval-signing-secret-32bytes"
+    public_base_url: str = "http://localhost:8000"
+    approval_ttl_minutes: int = 60
+
+    smtp_host: str = "localhost"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = "noreply@runlatch.dev"
+    smtp_use_tls: bool = True
+    slack_webhook_url: str = ""
+    discord_webhook_url: str = ""
+
     max_steps: int = 15
     max_tokens: int = 80000
     max_cost_usd: float = 0.50
@@ -89,6 +105,16 @@ class RunLatchSettings(BaseSettings):
             self.github_token,
             self.anthropic_api_key,
             self.gemini_api_key,
+            self.api_key if self.api_key != "dev-runlatch-api-key" else "",
+            self.github_webhook_secret
+            if self.github_webhook_secret != "dev-github-webhook-secret"
+            else "",
+            self.approval_signing_secret
+            if self.approval_signing_secret != "dev-approval-signing-secret-32bytes"
+            else "",
+            self.smtp_password,
+            self.slack_webhook_url,
+            self.discord_webhook_url,
         ]
         return [s for s in candidates if len(s) >= 8]
 

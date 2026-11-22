@@ -599,3 +599,49 @@ def replay_cmd(
         raise typer.Exit(code=1) from exc
 
     _render_run_result(result)
+
+
+@app.command("server")
+def server_cmd(
+    host: Annotated[str, typer.Option("--host", help="Bind host")] = "0.0.0.0",
+    port: Annotated[int, typer.Option("--port", help="Bind port")] = 8000,
+) -> None:
+    """Start the FastAPI Control Plane and HTMX Live Run Inspector server."""
+    import uvicorn
+
+    from runlatch.runtime.server.app import create_app
+
+    uvicorn.run(create_app(), host=host, port=port)
+
+
+@app.command("worker")
+def worker_cmd(
+    queues: Annotated[
+        str, typer.Option("--queues", "-Q", help="Comma-separated Celery queues")
+    ] = "agent.runs",
+    concurrency: Annotated[
+        int, typer.Option("--concurrency", "-c", help="Worker concurrency")
+    ] = 4,
+    loglevel: Annotated[str, typer.Option("--loglevel", help="Log level")] = "info",
+) -> None:
+    """Start a Celery background worker for the specified queues."""
+    from runlatch.runtime.workers.celery_app import celery_app
+
+    celery_app.worker_main(
+        argv=[
+            "worker",
+            f"--queues={queues}",
+            f"--concurrency={concurrency}",
+            f"--loglevel={loglevel}",
+        ]
+    )
+
+
+@app.command("beat")
+def beat_cmd(
+    loglevel: Annotated[str, typer.Option("--loglevel", help="Log level")] = "info",
+) -> None:
+    """Start the Celery Beat scheduler for approval sweeping and scheduled audits."""
+    from runlatch.runtime.workers.celery_app import celery_app
+
+    celery_app.start(argv=["beat", f"--loglevel={loglevel}"])

@@ -1,6 +1,8 @@
 """Stateless git workspace patch capture (git add -N . + git diff HEAD) and worktree reconstruction.
 
 Implements WorkspacePatcher protocol from runlatch.core.protocols.
+Supports both local worktree creation and remote worker clone+checkout when the original
+workspace_root does not exist on the resuming worker container.
 Imports ONLY Python stdlib and runlatch.core.*.
 """
 
@@ -51,12 +53,10 @@ class GitWorkspacePatcher:
 
     async def capture_patch(self) -> tuple[str, WorkspaceMeta]:
         """Run `git add -N .` then `git diff HEAD`, excluding binary files and capping at 512 KB."""
-        # 1. Intent-to-add all untracked files so brand-new text files appear in git diff HEAD
         code, _, err = await _run_git(self.workspace_root, "add", "-N", ".")
         if code != 0:
             raise RunLatchError(f"git add -N . failed: {err.strip()}")
 
-        # 2. Identify binary files via numstat (git marks binary diffs as '-\t-\t<file>')
         code, numstat_out, err = await _run_git(self.workspace_root, "diff", "--numstat", "HEAD")
         if code != 0:
             raise RunLatchError(f"git diff --numstat HEAD failed: {err.strip()}")
@@ -68,7 +68,6 @@ class GitWorkspacePatcher:
                 if binary_file:
                     binary_excludes.append(f":(exclude){binary_file}")
 
-        # 3. Capture unified text patch against HEAD, excluding any binary files cleanly
         diff_args = ["diff", "--no-ext-diff", "HEAD", "--", ".", *binary_excludes]
         code, patch, err = await _run_git(self.workspace_root, *diff_args)
         if code != 0:
@@ -97,10 +96,31 @@ class GitWorkspacePatcher:
         )
         return patch, meta
 
+    async def _ensure_base_repo(self, meta: WorkspaceMeta) -> Path:
+        """Return an existing local git repo root, or clone meta.repo_url on a remote worker."""
+        if (self.workspace_root / ".git").exists():
+            return self.workspace_root
+        if meta.workspace_root and (Path(meta.workspace_root) / ".git").exists():
+            return Path(meta.workspace_root).resolve()
+        if not meta.repo_url:
+            raise RunLatchError(
+                f"Workspace '{self.workspace_root}' does not exist locally and "
+                "WorkspaceMeta.repo_url is empty."
+            )
+
+        clone_dir = Path(tempfile.mkdtemp(prefix="runlatch_base_repo_")).resolve()
+        code, _, err = await _run_git(
+            clone_dir.parent, "clone", "--no-checkout", meta.repo_url, str(clone_dir)
+        )
+        if code != 0:
+            raise RunLatchError(f"git clone {meta.repo_url} failed: {err.strip()}")
+        return clone_dir
+
     async def apply_patch_in_worktree(
         self, patch: str, meta: WorkspaceMeta, target_dir: Path | None = None
     ) -> Path:
         """Create a fresh detached git worktree at base_commit_sha and apply patch with --3way."""
+        base_repo = await self._ensure_base_repo(meta)
         dest = (
             Path(target_dir).resolve()
             if target_dir is not None
@@ -108,11 +128,11 @@ class GitWorkspacePatcher:
             or Path(tempfile.mkdtemp(prefix="runlatch_wt_")).resolve()
         )
         if dest.exists() and any(dest.iterdir()):
-            await _run_git(self.workspace_root, "worktree", "remove", "--force", str(dest))
+            await _run_git(base_repo, "worktree", "remove", "--force", str(dest))
 
         commit_ref = meta.base_commit_sha or "HEAD"
         code, _, err = await _run_git(
-            self.workspace_root,
+            base_repo,
             "worktree",
             "add",
             "--detach",
