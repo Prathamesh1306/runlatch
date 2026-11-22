@@ -1,11 +1,14 @@
 # `runlatch` — Durable, HITL-First Execution Runtime for Autonomous Developer Agents
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](pyproject.toml)
-[![Architecture: Hexagonal](https://img.shields.io/badge/Architecture-Hexagonal-10b981.svg)](AGENTS.md)
-[![MCP: Governed](https://img.shields.io/badge/MCP-Fail--Closed_Governance-8b5cf6.svg)](runlatch/toolkits/mcp.py)
+[![PyPI version](https://img.shields.io/pypi/v/runlatch.svg)](https://pypi.org/project/runlatch/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Prathamesh1306/runlatch/blob/main/LICENSE)
+[![Python: 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://github.com/Prathamesh1306/runlatch/blob/main/pyproject.toml)
+[![Architecture: Hexagonal](https://img.shields.io/badge/Architecture-Hexagonal-10b981.svg)](https://github.com/Prathamesh1306/runlatch/blob/main/AGENTS.md)
+[![MCP: Governed](https://img.shields.io/badge/MCP-Fail--Closed_Governance-8b5cf6.svg)](https://github.com/Prathamesh1306/runlatch/blob/main/runlatch/toolkits/mcp.py)
 
 > *The MCP-native, event-driven Python runtime for autonomous developer workflows — zero-infra locally on SQLite, production-hardened with stateless pause/resume approvals on FastAPI, PostgreSQL, Redis, and Celery.*
+>
+> **[Complete User & Python API Usage Guide (`docs/USAGE.md`)](https://github.com/Prathamesh1306/runlatch/blob/main/docs/USAGE.md)**
 
 ---
 
@@ -31,51 +34,44 @@ Existing Python agent tools force an awkward choice:
 
 ## System Architecture
 
-```mermaid
-flowchart TB
-    subgraph Triggers["Triggers & Clients"]
-        CLI["CLI (`runlatch`) / Python SDK"]
-        GH["GitHub Webhooks (PR, Issue, CI, Push)"]
-        CRON["Celery Beat (5m Approval Sweeper + Weekly Audit)"]
-    end
-
-    subgraph ControlPlane["FastAPI Control Plane + HTMX UI (Layer 2)"]
-        API["REST + SSE API & Bearer Auth"]
-        UI["HTMX Run Inspector (`/ui`) & Read-Only Approval Page (`/ui/approvals/{id}`)"]
-        WH["Webhook Verifier (HMAC-SHA256 + Redis `SET NX EX 86400`)"]
-    end
-
-    subgraph Queue["Redis + Celery 3-Queue Backbone"]
-        Q_RUNS["Queue: `agent.runs` (`NullPool` Async Runner)"]
-        Q_NOTIFY["Queue: `agent.notifications` (5x Exponential Backoff)"]
-        Q_MAINT["Queue: `agent.maintenance`"]
-    end
-
-    subgraph Core["Hexagonal Core & Toolkits (Layer 1 — Zero External Framework Imports)"]
-        WF["Multi-Step `Workflow` & `StepExecutor` Protocol"]
-        AGENT["Bounded ReAct `Agent` + Loop Detector + Budget Caps"]
-        POLICY["`PolicyEngine` (`READ` / `WRITE` / `EXEC` / `EXTERNAL`) + `SecretRedactor`"]
-        TK["`FileToolkit` (`SEARCH/REPLACE`) · `GitToolkit` (`worktree`) · `ShellToolkit` · `GitHubToolkit` · `MCPToolkit`"]
-        LLM["LLM Adapters (OpenAI/Ollama/Groq/GitHub Models · Anthropic · Gemini · Mock)"]
-    end
-
-    subgraph Storage["Unified Async Storage & Notifications"]
-        DB[("SQLite (`aiosqlite`) Locally\nPostgreSQL (`asyncpg`) in Prod")]
-        NOTIF["NotificationRouter (Slack · Discord · GitHub · Webhook · SMTP Email)"]
-    end
-
-    CLI --> WF
-    GH --> WH --> Q_RUNS
-    CRON --> Q_MAINT
-    API --> Q_RUNS
-    UI -- "POST /api/v1/approvals/{id}/decision" --> API
-
-    Q_RUNS --> WF --> AGENT
-    AGENT <--> POLICY
-    AGENT <--> LLM
-    AGENT <--> TK
-    AGENT <--> DB
-    Q_RUNS -- "Approval Requested / Run Completed" --> Q_NOTIFY --> NOTIF --> DB
+```text
++------------------------------------------------------------------------------+
+|                            TRIGGERS & CLIENTS                                |
+|   CLI (runlatch)   |   GitHub Webhooks (PR/Issue/CI/Push)   |   Celery Beat  |
++--------------------+----------------------------------------+----------------+
+                                       |
+                                       v
++------------------------------------------------------------------------------+
+|                  FASTAPI CONTROL PLANE + HTMX UI (Layer 2)                   |
+|  - REST + SSE Streaming API (/api/v1/runs, /approvals, /metrics/summary)     |
+|  - Webhook Ingress (HMAC-SHA256 + Redis SET NX EX 86400 Idempotency)         |
+|  - Live Run Inspector (/ui) & Read-Only Approval Page (/ui/approvals/{id})   |
++--------------------------------------+---------------------------------------+
+                                       |
+                                       v
++------------------------------------------------------------------------------+
+|                   REDIS + CELERY 3-QUEUE BACKBONE                            |
+|   [agent.runs] (NullPool Async)   |   [agent.notifications] (5x Backoff)     |
+|   [agent.maintenance] (5m Stale Approval Sweeper + Weekly dep-audit)         |
++--------------------------------------+---------------------------------------+
+                                       |
+                                       v
++------------------------------------------------------------------------------+
+|               HEXAGONAL CORE & TOOLKITS (Layer 1 — Pure Python)              |
+|  - Workflow & StepExecutor Protocol (pr-review, issue-to-pr, ci-triage, ...) |
+|  - Bounded ReAct Agent + Duplicate-Call Loop Detector + Token/USD Caps       |
+|  - PolicyEngine (READ / WRITE / EXEC / EXTERNAL) + SecretRedactor            |
+|  - Toolkits: FileToolkit (SEARCH/REPLACE), GitToolkit (worktree),            |
+|              ShellToolkit (Subprocess / Docker), GitHubToolkit, MCPToolkit   |
+|  - LLM Adapters: OpenAI / Ollama / Groq / GitHub Models / Anthropic / Gemini |
++------------------+----------------------------------------+------------------+
+                   |                                        |
+                   v                                        v
++-----------------------------------+    +-------------------------------------+
+|   UNIFIED ASYNC STORAGE           |    |   NOTIFICATION ENGINE               |
+|   SQLite (aiosqlite) locally      |    |   Slack · Discord · GitHub PR       |
+|   PostgreSQL (asyncpg) in prod    |    |   HMAC Webhooks · SMTP Email        |
++-----------------------------------+    +-------------------------------------+
 ```
 
 ---
@@ -85,7 +81,11 @@ flowchart TB
 ### 1. Install & Run Built-in Flagship Workflows in `--demo` Mode
 
 ```bash
-pip install -e ".[dev]"
+# Core SDK & CLI (zero Docker/Redis required)
+pip install runlatch
+
+# Optional: add MCP server governance and/or full FastAPI + Celery + HTMX server extras
+pip install "runlatch[mcp,server]"
 
 # Initialize runlatch.toml policy config
 runlatch init
@@ -100,9 +100,26 @@ runlatch run issue-to-pr --demo   # Pauses at HITL gate -> approve with `runlatc
 runlatch run doc-sync --demo      # Pauses at HITL gate -> approve with `runlatch approve <id>`
 ```
 
-See a full recorded terminal trace in [`examples/traces/pr_review_demo.md`](examples/traces/pr_review_demo.md).
+See a full recorded terminal trace in [`examples/traces/pr_review_demo.md`](https://github.com/Prathamesh1306/runlatch/blob/main/examples/traces/pr_review_demo.md), or read the **[Complete Usage Guide (`docs/USAGE.md`)](https://github.com/Prathamesh1306/runlatch/blob/main/docs/USAGE.md)** for custom `@tool` functions, multi-step `Workflow` pipelines, and server setup.
 
-### 2. Minimal 15-Line Python Agent (Local Ollama / Groq / GitHub Models / OpenAI / Anthropic / Gemini)
+### 2. Minimal `.env` Configuration (BYOK or Zero-Key Local Ollama)
+
+```env
+# Local Free LLM (Ollama — zero API keys)
+RUNLATCH_LLM_PROVIDER=ollama
+RUNLATCH_LLM_MODEL=qwen2.5-coder:7b
+RUNLATCH_LLM_BASE_URL=http://localhost:11434/v1
+RUNLATCH_LLM_API_KEY=ollama
+
+# Or switch to Groq / GitHub Models / OpenAI / Anthropic / Gemini:
+# GROQ_API_KEY=gsk_...
+# GITHUB_TOKEN=github_pat_...
+# OPENAI_API_KEY=sk-...
+# ANTHROPIC_API_KEY=sk-ant-...
+# GEMINI_API_KEY=...
+```
+
+### 3. Minimal 15-Line Python Agent (Local Ollama / Groq / GitHub Models / OpenAI / Anthropic / Gemini)
 
 ```python
 import asyncio
@@ -123,14 +140,19 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-### 3. Fail-Closed MCP Server Governance (`MCPToolkit`)
+### 4. Fail-Closed MCP Server Governance (`MCPToolkit`)
 
 Wrap any third-party MCP server (`stdio` or `streamable_http`) with deterministic risk tiers, glob overrides, secret redaction, and HITL pause/resume — without trusting remote `readOnlyHint` annotations:
 
 ```python
 from runlatch import MCPServerConfig, MCPToolkit, PolicyEngine, RiskTier
 
-config = MCPServerConfig(server_name="ops", transport="stdio", command="npx", args=["-y", "@modelcontextprotocol/server-postgres"])
+config = MCPServerConfig(
+    server_name="ops",
+    transport="stdio",
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-postgres"],
+)
 
 async with MCPToolkit(
     config,
@@ -149,7 +171,10 @@ async with MCPToolkit(
 
 ## Running the Full Production Stack (`FastAPI + HTMX UI + Postgres + Redis + Celery`)
 
+Clone the repository for the Docker Compose stack and `.env.example`:
+
 ```bash
+git clone https://github.com/Prathamesh1306/runlatch.git && cd runlatch
 cp .env.example .env
 docker compose up --build
 ```
@@ -159,7 +184,7 @@ docker compose up --build
 - **Health & Readiness Probes:** `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`
 - **GitHub Webhook Endpoint:** `POST http://localhost:8000/api/v1/webhooks/github`
 
-Or start components individually from the CLI:
+Or start components individually from the CLI (`pip install "runlatch[server]"`):
 
 ```bash
 runlatch server --host 0.0.0.0 --port 8000
@@ -175,22 +200,20 @@ runlatch beat
 | Boundary | Deterministic Control in `runlatch` |
 |---|---|
 | **Filesystem Sandbox** | `resolve_safe_path()` enforces `Path.resolve().is_relative_to(workspace_root)`, blocking `..` traversal, symlink escapes, null bytes, and denied globs (`.env*`, `*.pem`, `*.key`, `id_rsa*`, `.git/config`). |
-| **Two-Tier Command Execution** | • **Trusted Local Repos (`SubprocessExecutor`):** `shell=False`, environment stripped to explicit allowlist, shell metacharacters blocked, and raw interpreters (`python`, `bash`, `sh`, `node`, `curl`) strictly forbidden.<br>• **Untrusted External PRs (`DockerSandboxExecutor`):** Runs inside ephemeral containers with `docker run --rm --network=none --cap-drop=ALL --read-only --memory=512m --cpus=1 --security-opt=no-new-privileges`. |
+| **Two-Tier Command Execution** | **Trusted Local Repos (`SubprocessExecutor`):** `shell=False`, environment stripped to explicit allowlist, shell metacharacters blocked, and raw interpreters (`python`, `bash`, `sh`, `node`, `curl`) strictly forbidden. **Untrusted External PRs (`DockerSandboxExecutor`):** Runs inside ephemeral containers with `docker run --rm --network=none --cap-drop=ALL --read-only --memory=512m --cpus=1 --security-opt=no-new-privileges`. |
 | **Secret Redaction** | `SecretRedactor` scrubs OpenAI, Anthropic, Groq, GitHub, Slack, AWS, Bearer, PEM private keys, and dynamic runtime secrets (including `SMTP_PASSWORD` and Slack/Discord webhook URLs) from all tool outputs, audit logs, and notifications before persistence or dispatch. |
 | **Safe HITL Approval Links** | Notification links point to a read-only `GET /ui/approvals/{id}` page; state changes happen strictly on `POST /api/v1/approvals/{id}/decision` inside an atomic `SELECT ... FOR UPDATE` transaction. |
 
 ---
 
-## Architecture & Engineering Documentation
+## Documentation
 
-- **[`AGENTS.md`](AGENTS.md)** — Strict hexagonal import boundaries (`tests/unit/test_hexagonal_boundaries.py`) & mandatory engineering invariants.
-- **[`START-HERE-ROADMAP.md`](START-HERE-ROADMAP.md)** — Concentric layer map and vertical slice build guide.
-- **[`product/01-vision-market-differentiation.md`](product/01-vision-market-differentiation.md)** & **[`product/02-use-cases-and-workflows.md`](product/02-use-cases-and-workflows.md)**
-- **[`architecture/03-tech-stack-and-tradeoffs.md`](architecture/03-tech-stack-and-tradeoffs.md)** through **[`architecture/07-security-guardrails-and-observability.md`](architecture/07-security-guardrails-and-observability.md)**
-- **[`engineering/08-repo-structure-and-dx.md`](engineering/08-repo-structure-and-dx.md)** through **[`engineering/10-testing-deployment-and-interview-playbook.md`](engineering/10-testing-deployment-and-interview-playbook.md)**
+- **[`docs/USAGE.md`](https://github.com/Prathamesh1306/runlatch/blob/main/docs/USAGE.md)** — Complete Usage & Python API Guide
+- **[`AGENTS.md`](https://github.com/Prathamesh1306/runlatch/blob/main/AGENTS.md)** — Hexagonal Architecture & Contributor Guardrails
+- **[`CHANGELOG.md`](https://github.com/Prathamesh1306/runlatch/blob/main/CHANGELOG.md)** — Release History
 
 ---
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](https://github.com/Prathamesh1306/runlatch/blob/main/LICENSE).

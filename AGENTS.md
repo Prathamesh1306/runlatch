@@ -1,6 +1,6 @@
 # `AGENTS.md` — Engineering & Architecture Guardrails for `runlatch`
 
-Read `START-HERE-ROADMAP.md` and `README.md` before writing code. Every change in this repository MUST obey these non-negotiable rules.
+Read `README.md` and `docs/USAGE.md` before writing code. Every change in this repository MUST obey these non-negotiable rules.
 
 ## 1. Strict Hexagonal Import Boundaries
 

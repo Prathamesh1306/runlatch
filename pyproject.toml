@@ -4,13 +4,37 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runlatch"
-version = "1.0.0"
+version = "1.0.1"
 description = "Durable, HITL-First Execution Runtime for Autonomous Developer Agents"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [
     { name = "Prathamesh Ghatkar", email = "prathameshghatkar54@gmail.com" },
+]
+keywords = [
+    "agents",
+    "ai-agents",
+    "mcp",
+    "hitl",
+    "human-in-the-loop",
+    "developer-tools",
+    "llm",
+    "tool-calling",
+    "celery",
+    "fastapi",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
 dependencies = [
     "pydantic>=2.6,<3.0",
@@ -51,6 +75,13 @@ dev = [
 
 [project.scripts]
 runlatch = "runlatch.runtime.cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/Prathamesh1306/runlatch"
+Repository = "https://github.com/Prathamesh1306/runlatch"
+Documentation = "https://github.com/Prathamesh1306/runlatch/blob/main/docs/USAGE.md"
+Issues = "https://github.com/Prathamesh1306/runlatch/issues"
+Changelog = "https://github.com/Prathamesh1306/runlatch/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]

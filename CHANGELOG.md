@@ -2,6 +2,15 @@
 
 All notable changes to `runlatch` are documented in this file.
 
+## [1.0.1] — 2026-11-22
+
+### Changed
+- **PyPI Packaging & Documentation Polish:**
+  - Replaced Mermaid architecture diagram in `README.md` with a clean ASCII diagram compatible with PyPI rendering.
+  - Updated quickstart install commands to `pip install runlatch` and `pip install "runlatch[mcp,server]"`, added a `.env` configuration snippet, and linked prominently to `docs/USAGE.md`.
+  - Converted all relative documentation/license/trace links in `README.md` to absolute GitHub URLs.
+  - Added `[project.urls]` (`Homepage`, `Repository`, `Documentation`, `Issues`, `Changelog`), `keywords`, and PyPI `classifiers` to `pyproject.toml`, and bumped version to `1.0.1`.
+
 ## [1.0.0] — 2026-11-22
 
 ### Added
