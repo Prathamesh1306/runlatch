@@ -104,3 +104,59 @@ def test_cli_issue_to_pr_demo_hitl_pause_approve_inspect_and_replay(tmp_path: Pa
     for fn in (approve_cmd, reject_cmd, replay_cmd):
         sig = inspect.signature(fn)
         assert sig.parameters["demo"].default is False
+
+
+def test_all_five_flagship_workflows_run_cleanly_in_demo_mode(tmp_path: Path) -> None:
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'all_workflows.db'}"
+
+    for wf_name in ("pr-review", "ci-triage", "dep-audit"):
+        res = runner.invoke(
+            app,
+            [
+                "run",
+                wf_name,
+                "--demo",
+                "--workspace",
+                str(Path.cwd()),
+                "--db",
+                db_url,
+            ],
+        )
+        assert res.exit_code == 0, f"{wf_name} failed:\n{res.stdout}"
+        assert "COMPLETED" in res.stdout
+        assert "$0.0000" in res.stdout
+
+    # doc-sync pauses at HITL gate on github_create_pr and completes upon approval
+    res_doc = runner.invoke(
+        app,
+        [
+            "run",
+            "doc-sync",
+            "--demo",
+            "--workspace",
+            str(Path.cwd()),
+            "--db",
+            db_url,
+        ],
+    )
+    assert res_doc.exit_code == 0, res_doc.stdout
+    assert "WAITING_APPROVAL" in res_doc.stdout
+    match = re.search(
+        r"runlatch approve ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        res_doc.stdout,
+    )
+    assert match is not None
+    res_doc_appr = runner.invoke(
+        app,
+        [
+            "approve",
+            match.group(1),
+            "--workspace",
+            str(Path.cwd()),
+            "--db",
+            db_url,
+        ],
+    )
+    assert res_doc_appr.exit_code == 0, res_doc_appr.stdout
+    assert "COMPLETED" in res_doc_appr.stdout
+    assert "https://github.com/demo/repo/pull/110" in res_doc_appr.stdout

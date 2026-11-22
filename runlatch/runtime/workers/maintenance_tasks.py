@@ -56,11 +56,11 @@ def scheduled_dep_audit_task(
         store: SQLAlchemyCheckpointStore, settings: RunLatchSettings
     ) -> dict[str, Any]:
         run_id = uuid4()
-        payload = {"repository": repository, "pr_number": 1, "demo": demo}
+        payload = {"repository": repository, "demo": demo}
         await store.save_checkpoint(
             RunCheckpoint(
                 run_id=run_id,
-                workflow_name="pr-review",
+                workflow_name="dep-audit",
                 status=RunStatus.QUEUED,
                 trigger_source="schedule",
                 repository=repository,
@@ -72,7 +72,7 @@ def scheduled_dep_audit_task(
             store,
             settings,
             run_id=run_id,
-            workflow_name="pr-review",
+            workflow_name="dep-audit",
             payload=payload,
         )
         return {"run_id": str(res.run_id), "status": res.status.value}

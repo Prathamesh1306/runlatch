@@ -1,7 +1,12 @@
 """runlatch — Durable, HITL-First Execution Runtime for Autonomous Developer Agents."""
 
 from runlatch.adapters.executors import DockerSandboxExecutor, SubprocessExecutor
-from runlatch.adapters.llm import MockLLMProvider, OpenAICompatibleProvider
+from runlatch.adapters.llm import (
+    AnthropicProvider,
+    GeminiProvider,
+    MockLLMProvider,
+    OpenAICompatibleProvider,
+)
 from runlatch.adapters.notifications import (
     DiscordNotificationProvider,
     GitHubCommentNotificationProvider,
@@ -10,6 +15,7 @@ from runlatch.adapters.notifications import (
     SMTPEmailNotificationProvider,
     WebhookNotificationProvider,
 )
+from runlatch.adapters.observability import OpenTelemetrySubscriber, RecordedSpan
 from runlatch.adapters.storage import SQLAlchemyCheckpointStore
 from runlatch.config import PolicySettings, RunLatchSettings
 from runlatch.core.agent import Agent
@@ -56,6 +62,7 @@ from runlatch.tools.registry import FunctionTool, ToolRegistry, tool
 
 __all__ = [
     "Agent",
+    "AnthropicProvider",
     "ApprovalAlreadyDecidedError",
     "ApprovalExpiredError",
     "ApprovalRequiredSignal",
@@ -66,6 +73,7 @@ __all__ = [
     "EventBus",
     "FileToolkit",
     "FunctionTool",
+    "GeminiProvider",
     "GitHubCommentNotificationProvider",
     "GitHubToolkit",
     "GitToolkit",
@@ -80,10 +88,12 @@ __all__ = [
     "NotificationEvent",
     "NotificationRouter",
     "OpenAICompatibleProvider",
+    "OpenTelemetrySubscriber",
     "PatchTooLargeError",
     "PolicyDeniedError",
     "PolicyEngine",
     "PolicySettings",
+    "RecordedSpan",
     "RiskTier",
     "RunCheckpoint",
     "RunLatchError",
