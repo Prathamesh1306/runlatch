@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: runlatch
+      POSTGRES_PASSWORD: runlatch_pass
+      POSTGRES_DB: runlatch_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - runlatch_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runlatch -d runlatch_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build: .
+    command: uvicorn runlatch.runtime.server.app:create_app --factory --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+      RUNLATCH_PUBLIC_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-agents:
+    build: .
+    command: celery -A runlatch.runtime.workers.celery_app:celery_app worker -Q agent.runs,agent.maintenance -c 4 --loglevel=info
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+      RUNLATCH_PUBLIC_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-notifications:
+    build: .
+    command: celery -A runlatch.runtime.workers.celery_app:celery_app worker -Q agent.notifications -c 8 --loglevel=info
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+      RUNLATCH_PUBLIC_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    build: .
+    command: celery -A runlatch.runtime.workers.celery_app:celery_app beat --loglevel=info
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  runlatch_pgdata:

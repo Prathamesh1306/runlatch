@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>runlatch — HITL Approval Confirmation</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
+    .box { max-width: 820px; margin: 0 auto; background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 24px; }
+    pre { background: #0f172a; padding: 14px; border-radius: 6px; overflow-x: auto; font-size: 0.85rem; color: #e2e8f0; }
+    .meta { margin-bottom: 16px; line-height: 1.7; }
+    .actions { display: flex; gap: 12px; margin-top: 20px; }
+    button { padding: 10px 20px; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.95rem; }
+    .btn-approve { background: #10b981; color: #052e16; }
+    .btn-reject { background: #ef4444; color: #ffffff; }
+    input[type="text"] { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: #f8fafc; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Human-in-the-Loop Approval Gate</h1>
+    <div class="meta">
+      <div><strong>Approval ID:</strong> <code>{{ approval.id }}</code></div>
+      <div><strong>Run ID:</strong> <code>{{ approval.run_id }}</code></div>
+      <div><strong>Tool Name:</strong> <code>{{ approval.tool_name }}</code> (Risk Tier: <strong>{{ approval.risk_tier.value }}</strong>)</div>
+      <div><strong>Status:</strong> <strong>{{ approval.status.value }}</strong></div>
+      {% if checkpoint %}
+      <div><strong>Workflow:</strong> {{ checkpoint.workflow_name }} | <strong>Cost So Far:</strong> ${{ "%.4f"|format(checkpoint.total_cost_usd) }}</div>
+      {% endif %}
+    </div>
+
+    <h3>Sanitized Tool Arguments</h3>
+    <pre>{{ approval.sanitized_args | tojson(indent=2) }}</pre>
+
+    {% if approval.diff_preview %}
+    <h3>Workspace Git Diff Preview</h3>
+    <pre>{{ approval.diff_preview }}</pre>
+    {% endif %}
+
+    {% if approval.status.value == "PENDING" %}
+    <form method="post" action="/api/v1/approvals/{{ approval.id }}/decision">
+      <input type="hidden" name="sig" value="{{ sig }}" />
+      <input type="hidden" name="exp" value="{{ exp }}" />
+      <input type="hidden" name="actor" value="web-reviewer" />
+      <label for="reason">Decision Rationale (optional):</label>
+      <input type="text" id="reason" name="reason" placeholder="Reviewed diff and verified tests" />
+      <div class="actions">
+        <button type="submit" name="decision" value="approve" class="btn-approve">Approve &amp; Resume</button>
+        <button type="submit" name="decision" value="reject" class="btn-reject">Reject Tool Call</button>
+      </div>
+    </form>
+    {% else %}
+    <p>This approval request has already been decided (<strong>{{ approval.status.value }}</strong> by {{ approval.decided_by or "system" }}).</p>
+    {% endif %}
+  </div>
+</body>
+</html>

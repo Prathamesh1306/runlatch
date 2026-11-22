@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>runlatch — Live Run Inspector</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
+    .container { max-width: 1100px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin-bottom: 4px; }
+    .subtitle { color: #94a3b8; margin-bottom: 24px; }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+    .card-label { color: #94a3b8; font-size: 0.85rem; }
+    .card-value { font-size: 1.5rem; font-weight: 700; margin-top: 6px; }
+    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
+    th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #334155; font-size: 0.9rem; }
+    th { background: #0f172a; color: #94a3b8; font-weight: 600; }
+    .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; background: #334155; }
+    .badge-COMPLETED { background: #065f46; color: #6ee7b7; }
+    .badge-WAITING_APPROVAL { background: #78350f; color: #fde68a; }
+    a { color: #38bdf8; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>runlatch — Live Run Inspector</h1>
+    <div class="subtitle">Durable, HITL-First Execution Runtime for Autonomous Developer Agents</div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Total Runs</div>
+        <div class="card-value">{{ summary.total_runs }}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Success Rate</div>
+        <div class="card-value">{{ summary.success_rate_pct }}%</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Tokens</div>
+        <div class="card-value">{{ summary.total_tokens }}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Total Cost (USD)</div>
+        <div class="card-value">${{ "%.4f"|format(summary.total_cost_usd) }}</div>
+      </div>
+    </div>
+
+    {% if approvals %}
+    <h2>Pending Human-in-the-Loop Approvals</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Approval ID</th>
+          <th>Run ID</th>
+          <th>Tool</th>
+          <th>Risk Tier</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in approvals %}
+        <tr>
+          <td><code>{{ item.id }}</code></td>
+          <td><code>{{ item.run_id }}</code></td>
+          <td><strong>{{ item.tool_name }}</strong></td>
+          <td><span class="badge">{{ item.risk_tier.value }}</span></td>
+          <td><a href="/ui/approvals/{{ item.id }}">Review &amp; Decide &rarr;</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <h2>Recent Workflow Runs</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Run ID</th>
+          <th>Workflow</th>
+          <th>Status</th>
+          <th>Step</th>
+          <th>Tokens</th>
+          <th>Cost (USD)</th>
+          <th>SSE Stream</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr>
+          <td><code>{{ run.run_id }}</code></td>
+          <td>{{ run.workflow_name }}</td>
+          <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
+          <td>{{ run.current_step_index }}</td>
+          <td>{{ run.total_input_tokens + run.total_output_tokens }}</td>
+          <td>${{ "%.4f"|format(run.total_cost_usd) }}</td>
+          <td><a href="/api/v1/runs/{{ run.run_id }}/stream">Stream</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
