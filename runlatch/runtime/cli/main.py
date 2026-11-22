@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from runlatch.adapters.llm.anthropic import AnthropicProvider
+from runlatch.adapters.llm.gemini import GeminiProvider
 from runlatch.adapters.llm.mock import MockLLMProvider
 from runlatch.adapters.llm.openai_compat import OpenAICompatibleProvider
 from runlatch.adapters.storage.sqlalchemy_store import SQLAlchemyCheckpointStore
@@ -20,6 +22,18 @@ from runlatch.core.exceptions import RunLatchError
 from runlatch.core.protocols import LLMProvider
 from runlatch.core.types import ApprovalStatus, RunResult, RunStatus
 from runlatch.core.workflow import Workflow
+from runlatch.workflows.ci_triage import (
+    build_ci_triage_workflow,
+    ci_triage_demo_responses,
+)
+from runlatch.workflows.dep_audit import (
+    build_dep_audit_workflow,
+    dep_audit_demo_responses,
+)
+from runlatch.workflows.doc_sync import (
+    build_doc_sync_workflow,
+    doc_sync_demo_responses,
+)
 from runlatch.workflows.issue_to_pr import (
     build_issue_to_pr_workflow,
     issue_to_pr_demo_responses,
@@ -63,6 +77,20 @@ max_duplicate_tool_calls = 2
 """
 
 
+def _demo_responses_for_workflow(workflow_name: str, issue: int = 108) -> list[object]:
+    if workflow_name == "pr-review":
+        return list(pr_review_demo_responses())
+    if workflow_name == "issue-to-pr":
+        return list(issue_to_pr_demo_responses(issue))
+    if workflow_name == "ci-triage":
+        return list(ci_triage_demo_responses())
+    if workflow_name == "dep-audit":
+        return list(dep_audit_demo_responses())
+    if workflow_name == "doc-sync":
+        return list(doc_sync_demo_responses())
+    return list(pr_review_demo_responses())
+
+
 def _resolve_provider(
     *,
     workflow_name: str,
@@ -72,16 +100,24 @@ def _resolve_provider(
     issue: int,
     settings: RunLatchSettings,
 ) -> LLMProvider:
+    from runlatch.core.types import LLMResponse
+
     if demo:
-        if workflow_name == "pr-review":
-            return MockLLMProvider(pr_review_demo_responses(), model="demo")
-        if workflow_name == "issue-to-pr":
-            return MockLLMProvider(issue_to_pr_demo_responses(issue), model="demo")
-        return MockLLMProvider(pr_review_demo_responses(), model="demo")
+        resps = [
+            r
+            for r in _demo_responses_for_workflow(workflow_name, issue)
+            if isinstance(r, LLMResponse)
+        ]
+        return MockLLMProvider(resps, model="demo")
 
     chosen = (provider_name or settings.llm_provider).strip().lower()
     if chosen == "mock":
-        return MockLLMProvider(pr_review_demo_responses(), model="mock")
+        resps = [
+            r
+            for r in _demo_responses_for_workflow(workflow_name, issue)
+            if isinstance(r, LLMResponse)
+        ]
+        return MockLLMProvider(resps, model="mock")
     if chosen == "ollama":
         return OpenAICompatibleProvider.ollama(
             model=model or settings.llm_model,
@@ -96,6 +132,16 @@ def _resolve_provider(
         return OpenAICompatibleProvider.github_models(
             token=settings.github_token or settings.llm_api_key,
             model=model or "gpt-4o-mini",
+        )
+    if chosen in ("anthropic", "claude"):
+        return AnthropicProvider(
+            model=model or "claude-3-5-sonnet-latest",
+            api_key=settings.anthropic_api_key or settings.llm_api_key,
+        )
+    if chosen in ("gemini", "google"):
+        return GeminiProvider(
+            model=model or "gemini-2.0-flash",
+            api_key=settings.gemini_api_key or settings.llm_api_key,
         )
     return OpenAICompatibleProvider(
         model=model or settings.llm_model,
@@ -126,8 +172,30 @@ def _build_workflow(
             max_cost_usd=max_cost,
             store=store,
         )
+    if workflow_name == "ci-triage":
+        return build_ci_triage_workflow(
+            provider,
+            workspace_root=workspace,
+            max_cost_usd=max_cost,
+            store=store,
+        )
+    if workflow_name == "dep-audit":
+        return build_dep_audit_workflow(
+            provider,
+            workspace_root=workspace,
+            max_cost_usd=max_cost,
+            store=store,
+        )
+    if workflow_name == "doc-sync":
+        return build_doc_sync_workflow(
+            provider,
+            workspace_root=workspace,
+            max_cost_usd=max_cost,
+            store=store,
+        )
     raise typer.BadParameter(
-        f"Unknown workflow '{workflow_name}'. Available: pr-review, issue-to-pr."
+        f"Unknown workflow '{workflow_name}'. "
+        "Available: pr-review, issue-to-pr, ci-triage, dep-audit, doc-sync."
     )
 
 
@@ -450,9 +518,14 @@ def _decide_and_resume(
                 or settings.llm_provider in ("mock", "demo")
             )
             if use_demo:
-                llm: LLMProvider = MockLLMProvider(
-                    [issue_to_pr_demo_responses(issue_num)[-1]], model="demo"
-                )
+                from runlatch.core.types import LLMResponse
+
+                all_demo = [
+                    r
+                    for r in _demo_responses_for_workflow(cp.workflow_name, issue_num)
+                    if isinstance(r, LLMResponse)
+                ]
+                llm: LLMProvider = MockLLMProvider([all_demo[-1]], model="demo")
             else:
                 llm = _resolve_provider(
                     workflow_name=cp.workflow_name,

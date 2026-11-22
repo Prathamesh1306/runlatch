@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from runlatch.adapters.llm.anthropic import AnthropicProvider
+from runlatch.adapters.llm.gemini import GeminiProvider
 from runlatch.adapters.llm.mock import MockLLMProvider
 from runlatch.adapters.llm.openai_compat import OpenAICompatibleProvider
 from runlatch.adapters.storage.sqlalchemy_store import SQLAlchemyCheckpointStore
@@ -13,6 +15,7 @@ from runlatch.config import RunLatchSettings
 from runlatch.core.protocols import LLMProvider
 from runlatch.core.types import (
     ApprovalStatus,
+    LLMResponse,
     NotificationEvent,
     RunResult,
     RunStatus,
@@ -28,6 +31,18 @@ from runlatch.runtime.workers.notification_tasks import (
     dispatch_notification_task,
 )
 from runlatch.tools.git_patcher import GitWorkspacePatcher
+from runlatch.workflows.ci_triage import (
+    build_ci_triage_workflow,
+    ci_triage_demo_responses,
+)
+from runlatch.workflows.dep_audit import (
+    build_dep_audit_workflow,
+    dep_audit_demo_responses,
+)
+from runlatch.workflows.doc_sync import (
+    build_doc_sync_workflow,
+    doc_sync_demo_responses,
+)
 from runlatch.workflows.issue_to_pr import (
     build_issue_to_pr_workflow,
     issue_to_pr_demo_responses,
@@ -36,6 +51,18 @@ from runlatch.workflows.pr_review import (
     build_pr_review_workflow,
     pr_review_demo_responses,
 )
+
+
+def _demo_responses(workflow_name: str, issue_num: int) -> list[LLMResponse]:
+    if workflow_name == "issue-to-pr":
+        return issue_to_pr_demo_responses(issue_num)
+    if workflow_name == "ci-triage":
+        return ci_triage_demo_responses()
+    if workflow_name == "dep-audit":
+        return dep_audit_demo_responses()
+    if workflow_name == "doc-sync":
+        return doc_sync_demo_responses()
+    return pr_review_demo_responses()
 
 
 def _select_worker_provider(
@@ -51,10 +78,8 @@ def _select_worker_provider(
         "demo",
     )
     if use_demo:
-        if workflow_name == "issue-to-pr":
-            resps = issue_to_pr_demo_responses(issue_num)
-            return MockLLMProvider([resps[-1]] if is_resume else resps, model="demo")
-        return MockLLMProvider(pr_review_demo_responses(), model="demo")
+        resps = _demo_responses(workflow_name, issue_num)
+        return MockLLMProvider([resps[-1]] if is_resume else resps, model="demo")
 
     prov = settings.llm_provider.strip().lower()
     if prov == "ollama":
@@ -68,6 +93,20 @@ def _select_worker_provider(
     if prov in ("github", "github-models", "github_models"):
         return OpenAICompatibleProvider.github_models(
             token=settings.github_token or settings.llm_api_key
+        )
+    if prov in ("anthropic", "claude"):
+        return AnthropicProvider(
+            model=settings.llm_model
+            if "claude" in settings.llm_model
+            else "claude-3-5-sonnet-latest",
+            api_key=settings.anthropic_api_key or settings.llm_api_key,
+        )
+    if prov in ("gemini", "google"):
+        return GeminiProvider(
+            model=settings.llm_model
+            if "gemini" in settings.llm_model
+            else "gemini-2.0-flash",
+            api_key=settings.gemini_api_key or settings.llm_api_key,
         )
     return OpenAICompatibleProvider(
         model=settings.llm_model,
@@ -86,6 +125,27 @@ def _construct_workflow(
 ) -> Workflow:
     if workflow_name == "issue-to-pr":
         return build_issue_to_pr_workflow(
+            provider,
+            workspace_root=workspace_root,
+            max_cost_usd=max_cost_usd,
+            store=store,
+        )
+    if workflow_name == "ci-triage":
+        return build_ci_triage_workflow(
+            provider,
+            workspace_root=workspace_root,
+            max_cost_usd=max_cost_usd,
+            store=store,
+        )
+    if workflow_name == "dep-audit":
+        return build_dep_audit_workflow(
+            provider,
+            workspace_root=workspace_root,
+            max_cost_usd=max_cost_usd,
+            store=store,
+        )
+    if workflow_name == "doc-sync":
+        return build_doc_sync_workflow(
             provider,
             workspace_root=workspace_root,
             max_cost_usd=max_cost_usd,
