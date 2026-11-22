@@ -2,6 +2,16 @@
 
 All notable changes to `runlatch` are documented in this file.
 
+## [1.1.0] — 2026-11-23
+
+### Added
+- **Default Webhook Notification Channels (`RUNLATCH_DEFAULT_NOTIFY_CHANNELS`):** Added `default_notify_channels` to `RunLatchSettings` with `parsed_notify_channels()`; GitHub webhook runs in `runlatch/runtime/server/routes/webhooks.py` now automatically attach configured channels to `input_payload["notify_channels"]`.
+- **Docker Compose `.env` Support:** Added `env_file` (with `required: false`) to `api`, `worker-agents`, `worker-notifications`, and `beat` in `docker-compose.yml`.
+- **Server Scaffolding via `runlatch init --server`:** Added `--server` option to `runlatch init` to generate `.env.example` and a PyPI-ready `docker-compose.yml` installing `runlatch[mcp,server]`.
+
+### Fixed
+- **Zero-Commit Git Repo Fallback:** `GitWorkspacePatcher.capture_patch()` and `GitToolkit.git_diff()` now gracefully diff against Git's empty tree object when a repository has zero commits yet (unborn `HEAD`).
+
 ## [1.0.1] — 2026-11-22
 
 ### Changed

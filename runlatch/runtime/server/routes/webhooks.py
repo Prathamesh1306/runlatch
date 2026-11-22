@@ -87,6 +87,10 @@ async def github_webhook(
     workflow_name, input_payload = _match_github_workflow(event_type, payload)
     repo_name = str(input_payload.get("repository") or "unknown/repo")
 
+    default_channels = ctx.settings.parsed_notify_channels()
+    if default_channels and "notify_channels" not in input_payload:
+        input_payload["notify_channels"] = default_channels
+
     if workflow_name is None:
         inserted = await ctx.store.record_webhook_event(
             provider="github",

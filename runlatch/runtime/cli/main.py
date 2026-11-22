@@ -76,6 +76,149 @@ max_cost_usd = 0.50
 max_duplicate_tool_calls = 2
 """
 
+SERVER_ENV_EXAMPLE_TEMPLATE = """# RunLatch Server & Workers Configuration (.env.example)
+RUNLATCH_LLM_PROVIDER=ollama
+RUNLATCH_LLM_MODEL=qwen2.5-coder:7b
+RUNLATCH_LLM_BASE_URL=http://host.docker.internal:11434/v1
+RUNLATCH_LLM_API_KEY=ollama
+
+# Cloud LLM & GitHub Tokens (Optional — BYOK)
+OPENAI_API_KEY=
+GROQ_API_KEY=
+GITHUB_TOKEN=
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+
+# Control Plane Security & Signed HITL Links
+RUNLATCH_API_KEY=change-me-api-key
+RUNLATCH_GITHUB_WEBHOOK_SECRET=change-me-webhook-secret
+RUNLATCH_APPROVAL_SIGNING_SECRET=change-me-signing-secret-at-least-32-bytes
+RUNLATCH_PUBLIC_BASE_URL=http://localhost:8000
+RUNLATCH_APPROVAL_TTL_MINUTES=60
+
+# Notifications (comma-separated defaults attached to GitHub webhook runs)
+RUNLATCH_DEFAULT_NOTIFY_CHANNELS=
+RUNLATCH_SLACK_WEBHOOK_URL=
+RUNLATCH_DISCORD_WEBHOOK_URL=
+RUNLATCH_SMTP_HOST=localhost
+RUNLATCH_SMTP_PORT=587
+RUNLATCH_SMTP_USERNAME=
+RUNLATCH_SMTP_PASSWORD=
+RUNLATCH_SMTP_FROM=noreply@runlatch.dev
+RUNLATCH_SMTP_USE_TLS=true
+"""
+
+SERVER_DOCKER_COMPOSE_TEMPLATE = """services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: runlatch
+      POSTGRES_PASSWORD: runlatch_pass
+      POSTGRES_DB: runlatch_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - runlatch_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runlatch -d runlatch_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: >
+      sh -c "pip install --no-cache-dir 'runlatch[mcp,server]' &&
+      runlatch server --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+      RUNLATCH_PUBLIC_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-agents:
+    image: python:3.12-slim
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    command: >
+      sh -c "apt-get update && apt-get install -y --no-install-recommends git &&
+      pip install --no-cache-dir 'runlatch[mcp,server]' &&
+      runlatch worker --queues agent.runs,agent.maintenance --concurrency 4"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+      RUNLATCH_PUBLIC_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker-notifications:
+    image: python:3.12-slim
+    working_dir: /workspace
+    command: >
+      sh -c "pip install --no-cache-dir 'runlatch[mcp,server]' &&
+      runlatch worker --queues agent.notifications --concurrency 8"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+      RUNLATCH_PUBLIC_BASE_URL: http://localhost:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  beat:
+    image: python:3.12-slim
+    working_dir: /workspace
+    command: >
+      sh -c "pip install --no-cache-dir 'runlatch[mcp,server]' &&
+      runlatch beat"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RUNLATCH_DATABASE_URL: postgresql+asyncpg://runlatch:runlatch_pass@postgres:5432/runlatch_db
+      RUNLATCH_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  runlatch_pgdata:
+"""
+
 
 def _demo_responses_for_workflow(workflow_name: str, issue: int = 108) -> list[object]:
     if workflow_name == "pr-review":
@@ -255,16 +398,34 @@ def init_cmd(
         Path, typer.Option("--path", help="Directory for runlatch.toml")
     ] = Path("."),
     force: Annotated[
-        bool, typer.Option("--force", help="Overwrite existing runlatch.toml")
+        bool, typer.Option("--force", help="Overwrite existing scaffolded files")
+    ] = False,
+    server: Annotated[
+        bool,
+        typer.Option(
+            "--server",
+            help="Also scaffold .env.example and PyPI-ready docker-compose.yml",
+        ),
     ] = False,
 ) -> None:
-    """Initialize a default runlatch.toml policy configuration file."""
-    target = path.resolve() / "runlatch.toml"
-    if target.exists() and not force:
-        console.print(f"[yellow]runlatch.toml already exists at {target}[/yellow]")
-        raise typer.Exit(code=0)
-    target.write_text(DEFAULT_TOML_TEMPLATE, encoding="utf-8")
-    console.print(f"[green]Initialized {target}[/green]")
+    """Initialize runlatch.toml (and optional --server stack files)."""
+    root = path.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    files_to_write: list[tuple[Path, str]] = [(root / "runlatch.toml", DEFAULT_TOML_TEMPLATE)]
+    if server:
+        files_to_write.extend(
+            [
+                (root / ".env.example", SERVER_ENV_EXAMPLE_TEMPLATE),
+                (root / "docker-compose.yml", SERVER_DOCKER_COMPOSE_TEMPLATE),
+            ]
+        )
+
+    for target, content in files_to_write:
+        if target.exists() and not force:
+            console.print(f"[yellow]{target.name} already exists at {target}[/yellow]")
+            continue
+        target.write_text(content, encoding="utf-8")
+        console.print(f"[green]Initialized {target}[/green]")
 
 
 @app.command("run")

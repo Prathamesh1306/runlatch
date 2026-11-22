@@ -88,6 +88,7 @@ class RunLatchSettings(BaseSettings):
     smtp_use_tls: bool = True
     slack_webhook_url: str = ""
     discord_webhook_url: str = ""
+    default_notify_channels: str = ""
 
     max_steps: int = 15
     max_tokens: int = 80000
@@ -95,6 +96,10 @@ class RunLatchSettings(BaseSettings):
     auto_approve_max_tier: RiskTier = RiskTier.WRITE
 
     policy: PolicySettings = Field(default_factory=PolicySettings)
+
+    def parsed_notify_channels(self) -> list[str]:
+        """Parse comma-separated `RUNLATCH_DEFAULT_NOTIFY_CHANNELS` into channel specs."""
+        return [ch.strip() for ch in self.default_notify_channels.split(",") if ch.strip()]
 
     def secret_values(self) -> list[str]:
         """Return non-empty sensitive credential strings for dynamic redaction."""

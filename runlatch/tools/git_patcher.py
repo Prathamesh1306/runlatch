@@ -16,6 +16,7 @@ from runlatch.core.exceptions import PatchTooLargeError, RunLatchError
 from runlatch.core.types import WorkspaceMeta
 
 MAX_PATCH_BYTES = 512 * 1024  # 512 KB hard ceiling
+EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 
 async def _run_git(
@@ -52,14 +53,26 @@ class GitWorkspacePatcher:
         self.last_restored_worktree: Path | None = None
 
     async def capture_patch(self) -> tuple[str, WorkspaceMeta]:
-        """Run `git add -N .` then `git diff HEAD`, excluding binary files and capping at 512 KB."""
+        """Run `git add -N .` then `git diff HEAD`, excluding binary files and capping at 512 KB.
+
+        Gracefully handles repositories with zero commits yet (unborn `HEAD`) by diffing against
+        Git's empty tree object.
+        """
         code, _, err = await _run_git(self.workspace_root, "add", "-N", ".")
         if code != 0:
             raise RunLatchError(f"git add -N . failed: {err.strip()}")
 
-        code, numstat_out, err = await _run_git(self.workspace_root, "diff", "--numstat", "HEAD")
+        head_code, sha_out, _ = await _run_git(
+            self.workspace_root, "rev-parse", "--verify", "HEAD"
+        )
+        has_head = head_code == 0
+        diff_target = "HEAD" if has_head else EMPTY_TREE_SHA
+
+        code, numstat_out, err = await _run_git(
+            self.workspace_root, "diff", "--numstat", diff_target
+        )
         if code != 0:
-            raise RunLatchError(f"git diff --numstat HEAD failed: {err.strip()}")
+            raise RunLatchError(f"git diff --numstat {diff_target} failed: {err.strip()}")
 
         binary_excludes: list[str] = []
         for line in numstat_out.splitlines():
@@ -68,10 +81,10 @@ class GitWorkspacePatcher:
                 if binary_file:
                     binary_excludes.append(f":(exclude){binary_file}")
 
-        diff_args = ["diff", "--no-ext-diff", "HEAD", "--", ".", *binary_excludes]
+        diff_args = ["diff", "--no-ext-diff", diff_target, "--", ".", *binary_excludes]
         code, patch, err = await _run_git(self.workspace_root, *diff_args)
         if code != 0:
-            raise RunLatchError(f"git diff HEAD failed: {err.strip()}")
+            raise RunLatchError(f"git diff {diff_target} failed: {err.strip()}")
 
         patch_bytes = len(patch.encode("utf-8"))
         if patch_bytes > self.max_patch_bytes:
@@ -80,17 +93,23 @@ class GitWorkspacePatcher:
                 f"{self.max_patch_bytes} bytes limit."
             )
 
-        _, sha_out, _ = await _run_git(self.workspace_root, "rev-parse", "HEAD")
-        _, branch_out, _ = await _run_git(
-            self.workspace_root, "rev-parse", "--abbrev-ref", "HEAD"
-        )
+        if has_head:
+            _, branch_out, _ = await _run_git(
+                self.workspace_root, "rev-parse", "--abbrev-ref", "HEAD"
+            )
+            base_sha = sha_out.strip()
+        else:
+            _, branch_out, _ = await _run_git(
+                self.workspace_root, "symbolic-ref", "--short", "HEAD"
+            )
+            base_sha = ""
         _, remote_out, _ = await _run_git(
             self.workspace_root, "config", "--get", "remote.origin.url"
         )
 
         meta = WorkspaceMeta(
             repo_url=remote_out.strip(),
-            base_commit_sha=sha_out.strip(),
+            base_commit_sha=base_sha,
             branch_name=branch_out.strip(),
             workspace_root=str(self.workspace_root),
         )
