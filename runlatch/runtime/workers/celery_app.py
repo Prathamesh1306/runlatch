@@ -15,7 +15,7 @@ from uuid import UUID
 
 from celery import Celery
 from celery.schedules import crontab
-from kombu import Queue
+from kombu.entity import Queue
 
 from runlatch.adapters.storage.sqlalchemy_store import SQLAlchemyCheckpointStore
 from runlatch.config import RunLatchSettings
@@ -27,10 +27,12 @@ QUEUE_NOTIFICATIONS = "agent.notifications"
 QUEUE_MAINTENANCE = "agent.maintenance"
 
 
-def create_celery_app(settings: RunLatchSettings | None = None) -> Celery:
+def create_celery_app(settings: RunLatchSettings | None = None) -> Any:
     """Create and configure the 3-queue Celery application."""
     cfg = settings or RunLatchSettings.load()
-    app = Celery(
+    celery_cls: Any = Celery
+    queue_cls: Any = Queue
+    app = celery_cls(
         "runlatch",
         broker=cfg.redis_url,
         backend=cfg.redis_url,
@@ -51,9 +53,9 @@ def create_celery_app(settings: RunLatchSettings | None = None) -> Celery:
         enable_utc=True,
         task_default_queue=QUEUE_AGENT_RUNS,
         task_queues=(
-            Queue(QUEUE_AGENT_RUNS),
-            Queue(QUEUE_NOTIFICATIONS),
-            Queue(QUEUE_MAINTENANCE),
+            queue_cls(QUEUE_AGENT_RUNS),
+            queue_cls(QUEUE_NOTIFICATIONS),
+            queue_cls(QUEUE_MAINTENANCE),
         ),
         task_routes={
             "runlatch.workers.run_workflow_task": {"queue": QUEUE_AGENT_RUNS},
@@ -82,7 +84,7 @@ def create_celery_app(settings: RunLatchSettings | None = None) -> Celery:
     return app
 
 
-celery_app = create_celery_app()
+celery_app: Any = create_celery_app()
 
 
 async def execute_with_null_pool(
