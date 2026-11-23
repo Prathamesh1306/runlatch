@@ -13,10 +13,19 @@ from typer.testing import CliRunner
 
 from runlatch.adapters.storage.sqlalchemy_store import SQLAlchemyCheckpointStore
 from runlatch.config import RunLatchSettings
+from runlatch.core.types import (
+    ApprovalRequestRecord,
+    ApprovalStatus,
+    RiskTier,
+    RunCheckpoint,
+    RunStatus,
+    ToolCall,
+)
 from runlatch.runtime.cli.main import app as cli_app
 from runlatch.runtime.server.app import create_app
 from runlatch.runtime.server.auth import compute_github_signature
 from runlatch.runtime.server.deps import InProcessTaskDispatcher
+from runlatch.runtime.server.routes.ui import parse_unified_diff
 from runlatch.toolkits.git import GitToolkit
 
 
@@ -174,3 +183,100 @@ async def test_git_diff_and_patcher_fallback_on_unborn_head(tmp_path: Path) -> N
     assert meta.base_commit_sha == ""
     assert meta.branch_name == "main"
     assert meta.workspace_root == str(repo)
+
+
+def test_parse_unified_diff_line_numbers_and_stats() -> None:
+    """Unified git diff parser should classify hunk/add/del/ctx lines and stats."""
+    sample = (
+        "diff --git a/app.py b/app.py\n"
+        "--- a/app.py\n"
+        "+++ b/app.py\n"
+        "@@ -10,3 +10,4 @@ def greet():\n"
+        "     old_ctx = True\n"
+        "-    return 'hi'\n"
+        "+    msg = 'hello'\n"
+        "+    return msg\n"
+    )
+    lines, stats = parse_unified_diff(sample)
+    assert stats == {"added": 2, "removed": 1, "files": 1}
+    kinds = [item["kind"] for item in lines]
+    assert kinds == ["meta", "meta", "meta", "hunk", "ctx", "del", "add", "add"]
+    assert lines[4]["old_num"] == "10" and lines[4]["new_num"] == "10"
+    assert lines[5]["old_num"] == "11" and lines[5]["new_num"] == ""
+    assert lines[6]["old_num"] == "" and lines[6]["new_num"] == "11"
+    assert lines[7]["old_num"] == "" and lines[7]["new_num"] == "12"
+
+
+@pytest.mark.asyncio
+async def test_v111_ui_dashboard_and_approval_diff_viewer(tmp_path: Path) -> None:
+    """Dashboard and approval UI should render SSE drawer, signed links, and diff rows."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'ui_v111.db'}"
+    settings = RunLatchSettings(
+        database_url=db_url,
+        api_key="test-bearer-secret-key",
+        github_webhook_secret="test-gh-webhook-secret",
+        approval_signing_secret="test-approval-signing-secret-key",
+        public_base_url="http://testserver",
+    )
+    store = SQLAlchemyCheckpointStore(db_url)
+    await store.initialize()
+    dispatcher = InProcessTaskDispatcher()
+    app = create_app(settings=settings, store=store, dispatcher=dispatcher)
+    transport = httpx.ASGITransport(app=app)
+
+    cp = RunCheckpoint(
+        workflow_name="doc-sync",
+        status=RunStatus.WAITING_APPROVAL,
+        pending_tool_call=ToolCall(
+            id="tc_doc",
+            name="github_create_pr",
+            arguments={"title": "docs: sync CLI flags"},
+        ),
+        workspace_patch=(
+            "diff --git a/README.md b/README.md\n"
+            "@@ -1,2 +1,2 @@\n"
+            "-old line\n"
+            "+new line\n"
+        ),
+    )
+    approval = ApprovalRequestRecord(
+        run_id=cp.run_id,
+        call_id="tc_doc",
+        tool_name="github_create_pr",
+        risk_tier=RiskTier.EXTERNAL,
+        sanitized_args={"title": "docs: sync CLI flags"},
+        diff_preview=cp.workspace_patch,
+        status=ApprovalStatus.PENDING,
+    )
+    cp.pending_approval_id = approval.id
+    await store.save_checkpoint(cp)
+    await store.create_approval(approval)
+
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            r_ui = await client.get("/ui")
+            assert r_ui.status_code == 200
+            assert "Action Required" in r_ui.text
+            assert f"/ui/approvals/{approval.id}?sig=" in r_ui.text
+            assert 'id="sse-drawer"' in r_ui.text
+            assert 'hx-select="#dashboard-body"' in r_ui.text
+            assert "Watch Live" in r_ui.text
+            assert str(cp.run_id)[:8] in r_ui.text
+
+            r_confirm = await client.get(f"/ui/approvals/{approval.id}")
+            assert r_confirm.status_code == 200
+            assert "diff-line-add" in r_confirm.text
+            assert "diff-line-del" in r_confirm.text
+            assert "diff-line-hunk" in r_confirm.text
+            assert 'id="decision-feedback"' in r_confirm.text
+            assert "Approve &amp; Resume" in r_confirm.text
+
+            # Verify GET never mutates approval status
+            after = await store.get_approval(approval.id)
+            assert after is not None and after.status == ApprovalStatus.PENDING
+    finally:
+        await store.dispose()
+

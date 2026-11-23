@@ -2,6 +2,14 @@
 
 All notable changes to `runlatch` are documented in this file.
 
+## [1.1.1] — 2026-11-23
+
+### Changed
+- **Live Run Inspector & HITL Approval Gate UI Redesign (`GET /ui`, `GET /ui/approvals/{id}`):**
+  - Redesigned `index.html` and `approval_confirm.html` with a Linear/Vercel dark obsidian theme (`#09090b`), sticky top navbar, live status indicator, shortened 8-character monospace UUID pills with 1-click Copy-to-Clipboard, and color-coded status/risk badges.
+  - Added an in-page collapsible **Live SSE Event Terminal** drawer (`EventSource('/api/v1/runs/{id}/stream')`), an optional 3-second HTMX auto-refresh toggle (`hx-select="#dashboard-body"`), and prominent **Action Required** cards with pre-signed `Review & Decide ->` links on `/ui`.
+  - Added a GitHub-style unified diff viewer (`parse_unified_diff` in `runlatch/runtime/server/routes/ui.py`) with line numbers and `+`/`-`/`@@` syntax highlighting, copyable `sanitized_args` JSON card, and in-place `fetch()` decision confirmation banners on `/ui/approvals/{id}` while keeping `GET /ui/approvals/{id}` strictly read-only.
+
 ## [1.1.0] — 2026-11-23
 
 ### Added

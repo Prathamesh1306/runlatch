@@ -4,30 +4,654 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>runlatch — Live Run Inspector</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
-    .container { max-width: 1100px; margin: 0 auto; }
-    h1 { font-size: 1.5rem; margin-bottom: 4px; }
-    .subtitle { color: #94a3b8; margin-bottom: 24px; }
-    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
-    .card-label { color: #94a3b8; font-size: 0.85rem; }
-    .card-value { font-size: 1.5rem; font-weight: 700; margin-top: 6px; }
-    table { width: 100%; border-collapse: collapse; background: #1e293b; border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
-    th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid #334155; font-size: 0.9rem; }
-    th { background: #0f172a; color: #94a3b8; font-weight: 600; }
-    .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.78rem; font-weight: 600; background: #334155; }
-    .badge-COMPLETED { background: #065f46; color: #6ee7b7; }
-    .badge-WAITING_APPROVAL { background: #78350f; color: #fde68a; }
-    a { color: #38bdf8; text-decoration: none; }
+    :root {
+      --bg-canvas: #09090b;
+      --bg-surface: #111114;
+      --bg-elevated: #18181b;
+      --bg-hover: #1f1f24;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.14);
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --emerald-fg: #34d399;
+      --emerald-bg: rgba(16, 185, 129, 0.12);
+      --emerald-border: rgba(16, 185, 129, 0.28);
+      --amber-fg: #fbbf24;
+      --amber-bg: rgba(245, 158, 11, 0.12);
+      --amber-border: rgba(245, 158, 11, 0.35);
+      --sky-fg: #38bdf8;
+      --sky-bg: rgba(56, 189, 248, 0.12);
+      --sky-border: rgba(56, 189, 248, 0.28);
+      --indigo-fg: #818cf8;
+      --indigo-bg: rgba(99, 102, 241, 0.14);
+      --indigo-border: rgba(99, 102, 241, 0.32);
+      --rose-fg: #fb7185;
+      --rose-bg: rgba(244, 63, 94, 0.12);
+      --rose-border: rgba(244, 63, 94, 0.28);
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--bg-canvas);
+      background-image: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.10), transparent);
+      color: var(--text-primary);
+      margin: 0;
+      padding: 0 0 80px 0;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Sticky Top Navbar */
+    .navbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(9, 9, 11, 0.82);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 12px 24px;
+    }
+    .navbar-inner {
+      max-width: 1220px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: var(--text-primary);
+    }
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: linear-gradient(135deg, #10b981, #059669);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 0.85rem;
+      color: #052e16;
+      box-shadow: 0 0 18px rgba(16, 185, 129, 0.35);
+    }
+    .brand-title {
+      font-weight: 600;
+      font-size: 0.95rem;
+      letter-spacing: -0.01em;
+    }
+    .brand-sep { color: var(--text-muted); font-weight: 400; margin: 0 2px; }
+    .brand-sub { color: var(--text-secondary); font-size: 0.85rem; font-weight: 400; }
+
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      background: var(--emerald-bg);
+      border: 1px solid var(--emerald-border);
+      color: var(--emerald-fg);
+      font-size: 0.73rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--emerald-fg);
+      box-shadow: 0 0 8px var(--emerald-fg);
+      animation: pulseGlow 2s infinite ease-in-out;
+    }
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.88); }
+    }
+
+    .nav-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+    .btn:hover {
+      background: var(--bg-elevated);
+      border-color: var(--border-strong);
+    }
+    .btn-toggle.active {
+      border-color: var(--emerald-border);
+      background: var(--emerald-bg);
+      color: var(--emerald-fg);
+    }
+    .btn-amber {
+      background: linear-gradient(180deg, #f59e0b, #d97706);
+      border-color: rgba(251, 191, 36, 0.5);
+      color: #09090b;
+      font-weight: 600;
+      box-shadow: 0 2px 12px rgba(245, 158, 11, 0.22);
+    }
+    .btn-amber:hover {
+      background: linear-gradient(180deg, #fbbf24, #f59e0b);
+      border-color: #fbbf24;
+      color: #09090b;
+    }
+    .btn-stream {
+      padding: 4px 10px;
+      font-size: 0.76rem;
+      font-family: var(--font-mono);
+      color: var(--sky-fg);
+      border-color: var(--sky-border);
+      background: var(--sky-bg);
+    }
+    .btn-stream:hover {
+      background: rgba(56, 189, 248, 0.22);
+      border-color: var(--sky-fg);
+    }
+
+    /* Container & Header */
+    .container {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 28px 24px 0;
+    }
+    .hero-bar {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: -0.025em;
+      margin: 0 0 4px 0;
+    }
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 0.86rem;
+      margin: 0;
+    }
+
+    /* Metric Cards */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+    @media (max-width: 860px) {
+      .cards { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 520px) {
+      .cards { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 16px 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+    }
+    .card-label {
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .card-value {
+      font-size: 1.6rem;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      letter-spacing: -0.03em;
+      margin-top: 8px;
+      color: var(--text-primary);
+    }
+
+    /* Action Required (HITL Pending Approvals) */
+    .action-required-panel {
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.08), rgba(17, 17, 20, 0.95));
+      border: 1px solid var(--amber-border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin-bottom: 28px;
+      box-shadow: 0 0 32px rgba(245, 158, 11, 0.08);
+    }
+    .action-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .action-title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .amber-pulse {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--amber-fg);
+      box-shadow: 0 0 10px var(--amber-fg);
+      animation: pulseGlow 1.6s infinite ease-in-out;
+    }
+    .action-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--amber-fg);
+      margin: 0;
+    }
+    .action-count {
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--amber-bg);
+      border: 1px solid var(--amber-border);
+      color: var(--amber-fg);
+    }
+    .approval-cards {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .approval-row-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 14px;
+      background: rgba(9, 9, 11, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 12px 16px;
+    }
+    .approval-meta {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      min-width: 0;
+      flex: 1;
+    }
+    .tool-chip {
+      font-family: var(--font-mono);
+      font-size: 0.84rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      padding: 3px 9px;
+      border-radius: 6px;
+    }
+    .args-preview {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      color: var(--text-secondary);
+      background: rgba(255, 255, 255, 0.03);
+      padding: 3px 8px;
+      border-radius: 5px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      max-width: 440px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Section Headings & Tables */
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    h2 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      margin: 0;
+      color: var(--text-primary);
+    }
+    .table-shell {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      overflow-x: auto;
+      margin-bottom: 28px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      text-align: left;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-subtle);
+      font-size: 0.84rem;
+      white-space: nowrap;
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr { transition: background 0.12s ease; }
+    tbody tr:hover { background: var(--bg-hover); }
+    th {
+      background: rgba(24, 24, 27, 0.65);
+      color: var(--text-secondary);
+      font-weight: 500;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Shortened Monospace UUID Pill with 1-click Copy */
+    .uuid-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 2px 7px;
+    }
+    .uuid-full-sr {
+      display: none;
+    }
+    .copy-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 1px 3px;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      border-radius: 4px;
+      transition: color 0.12s ease, background 0.12s ease;
+    }
+    .copy-btn:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .copy-btn.copied {
+      color: var(--emerald-fg);
+    }
+
+    /* Status Pills */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+    }
+    .badge-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .badge-COMPLETED {
+      background: var(--emerald-bg);
+      color: var(--emerald-fg);
+      border-color: var(--emerald-border);
+    }
+    .badge-WAITING_APPROVAL {
+      background: var(--amber-bg);
+      color: var(--amber-fg);
+      border-color: var(--amber-border);
+    }
+    .badge-WAITING_APPROVAL .badge-dot {
+      animation: pulseGlow 1.5s infinite ease-in-out;
+    }
+    .badge-RESUMING {
+      background: var(--sky-bg);
+      color: var(--sky-fg);
+      border-color: var(--sky-border);
+    }
+    .badge-RUNNING {
+      background: var(--indigo-bg);
+      color: var(--indigo-fg);
+      border-color: var(--indigo-border);
+    }
+    .badge-FAILED, .badge-CANCELLED {
+      background: var(--rose-bg);
+      color: var(--rose-fg);
+      border-color: var(--rose-border);
+    }
+
+    /* Risk Tier Badges */
+    .risk-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 5px;
+      font-family: var(--font-mono);
+      font-size: 0.71rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      border: 1px solid var(--border-subtle);
+    }
+    .risk-READ {
+      background: var(--emerald-bg);
+      color: var(--emerald-fg);
+      border-color: var(--emerald-border);
+    }
+    .risk-WRITE {
+      background: var(--sky-bg);
+      color: var(--sky-fg);
+      border-color: var(--sky-border);
+    }
+    .risk-EXEC {
+      background: var(--amber-bg);
+      color: var(--amber-fg);
+      border-color: var(--amber-border);
+    }
+    .risk-EXTERNAL {
+      background: var(--rose-bg);
+      color: var(--rose-fg);
+      border-color: var(--rose-border);
+    }
+
+    .mono-cell {
+      font-family: var(--font-mono);
+      font-size: 0.81rem;
+      color: var(--text-secondary);
+    }
+    .workflow-name {
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+    .empty-state {
+      text-align: center;
+      padding: 36px 20px;
+      color: var(--text-muted);
+      font-size: 0.86rem;
+    }
+
+    /* Collapsible Live SSE Event Terminal Drawer */
+    .sse-drawer {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 50;
+      background: rgba(12, 12, 15, 0.96);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-top: 1px solid var(--border-strong);
+      box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.65);
+      transform: translateY(100%);
+      transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      max-height: 44vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .sse-drawer.open {
+      transform: translateY(0);
+    }
+    .sse-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border-subtle);
+      gap: 12px;
+    }
+    .sse-title-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-primary);
+    }
+    .sse-log-body {
+      padding: 14px 20px;
+      overflow-y: auto;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      line-height: 1.6;
+      flex: 1;
+      color: #d4d4d8;
+    }
+    .sse-line {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 3px 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+    }
+    .sse-ts {
+      color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .sse-evt-tag {
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: var(--indigo-bg);
+      color: var(--indigo-fg);
+      border: 1px solid var(--indigo-border);
+      flex-shrink: 0;
+    }
+    .sse-payload {
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: var(--text-primary);
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>runlatch — Live Run Inspector</h1>
-    <div class="subtitle">Durable, HITL-First Execution Runtime for Autonomous Developer Agents</div>
+  <!-- Sticky Developer Navbar -->
+  <header class="navbar">
+    <div class="navbar-inner">
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <a href="/ui" class="brand">
+          <span class="brand-icon">RL</span>
+          <span class="brand-title">runlatch</span>
+          <span class="brand-sep">/</span>
+          <span class="brand-sub">Live Run Inspector</span>
+        </a>
+        <span class="live-pill">
+          <span class="pulse-dot"></span>
+          Live
+        </span>
+      </div>
+      <div class="nav-controls">
+        <button
+          type="button"
+          id="auto-refresh-btn"
+          class="btn btn-toggle"
+          onclick="toggleAutoRefresh()"
+          title="Poll /ui every 3 seconds via HTMX"
+        >
+          <span id="auto-refresh-indicator">○</span>
+          Auto-refresh (3s)
+        </button>
+        <button
+          type="button"
+          class="btn"
+          onclick="triggerDashboardRefresh()"
+          title="Refresh dashboard now"
+        >
+          ↻ Refresh
+        </button>
+      </div>
+    </div>
+  </header>
 
+  <!-- HTMX Polled Dashboard Body -->
+  <main
+    id="dashboard-body"
+    class="container"
+    hx-get="/ui"
+    hx-trigger="every 3s[window.runlatchAutoRefresh === true]"
+    hx-select="#dashboard-body"
+    hx-target="#dashboard-body"
+    hx-swap="outerHTML"
+  >
+    <div class="hero-bar">
+      <div>
+        <h1>runlatch — Live Run Inspector</h1>
+        <p class="subtitle">Durable, HITL-First Execution Runtime for Autonomous Developer Agents</p>
+      </div>
+    </div>
+
+    <!-- Summary Metrics Cards -->
     <div class="cards">
       <div class="card">
         <div class="card-label">Total Runs</div>
@@ -47,59 +671,271 @@
       </div>
     </div>
 
+    <!-- Prominent Action Required Card for Pending HITL Approvals -->
     {% if approvals %}
-    <h2>Pending Human-in-the-Loop Approvals</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Approval ID</th>
-          <th>Run ID</th>
-          <th>Tool</th>
-          <th>Risk Tier</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
+    <section class="action-required-panel" aria-label="Pending Human-in-the-Loop Approvals">
+      <div class="action-header">
+        <div class="action-title-group">
+          <span class="amber-pulse"></span>
+          <h2 class="action-title">Action Required — Pending Human-in-the-Loop Approvals</h2>
+          <span class="action-count">{{ approvals|length }} pending</span>
+        </div>
+      </div>
+      <div class="approval-cards">
         {% for item in approvals %}
-        <tr>
-          <td><code>{{ item.id }}</code></td>
-          <td><code>{{ item.run_id }}</code></td>
-          <td><strong>{{ item.tool_name }}</strong></td>
-          <td><span class="badge">{{ item.risk_tier.value }}</span></td>
-          <td><a href="/ui/approvals/{{ item.id }}">Review &amp; Decide &rarr;</a></td>
-        </tr>
+        {% set item_key = item.id | string %}
+        {% set run_key = item.run_id | string %}
+        <div class="approval-row-card">
+          <div class="approval-meta">
+            <span class="tool-chip">{{ item.tool_name }}</span>
+            <span class="risk-badge risk-{{ item.risk_tier.value }}">{{ item.risk_tier.value }}</span>
+            <span class="uuid-pill" title="Approval ID: {{ item.id }}">
+              <span>{{ item_key[:8] }}…</span>
+              <code class="uuid-full-sr">{{ item.id }}</code>
+              <button
+                type="button"
+                class="copy-btn"
+                onclick="copyUuid('{{ item.id }}', this)"
+                title="Copy full Approval UUID"
+              >Copy</button>
+            </span>
+            <span class="uuid-pill" title="Run ID: {{ item.run_id }}">
+              <span>run:{{ run_key[:8] }}…</span>
+              <code class="uuid-full-sr">{{ item.run_id }}</code>
+              <button
+                type="button"
+                class="copy-btn"
+                onclick="copyUuid('{{ item.run_id }}', this)"
+                title="Copy full Run UUID"
+              >Copy</button>
+            </span>
+            {% if approval_arg_previews and approval_arg_previews.get(item_key) %}
+            <span class="args-preview" title="{{ approval_arg_previews.get(item_key) }}">
+              {{ approval_arg_previews.get(item_key) }}
+            </span>
+            {% endif %}
+          </div>
+          <div>
+            <a
+              href="{{ approval_links.get(item_key, '/ui/approvals/' ~ item_key) if approval_links else '/ui/approvals/' ~ item_key }}"
+              class="btn btn-amber"
+            >
+              Review &amp; Decide &rarr;
+            </a>
+          </div>
+        </div>
         {% endfor %}
-      </tbody>
-    </table>
+      </div>
+    </section>
     {% endif %}
 
-    <h2>Recent Workflow Runs</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Run ID</th>
-          <th>Workflow</th>
-          <th>Status</th>
-          <th>Step</th>
-          <th>Tokens</th>
-          <th>Cost (USD)</th>
-          <th>SSE Stream</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for run in runs %}
-        <tr>
-          <td><code>{{ run.run_id }}</code></td>
-          <td>{{ run.workflow_name }}</td>
-          <td><span class="badge badge-{{ run.status.value }}">{{ run.status.value }}</span></td>
-          <td>{{ run.current_step_index }}</td>
-          <td>{{ run.total_input_tokens + run.total_output_tokens }}</td>
-          <td>${{ "%.4f"|format(run.total_cost_usd) }}</td>
-          <td><a href="/api/v1/runs/{{ run.run_id }}/stream">Stream</a></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+    <!-- Recent Workflow Runs Table -->
+    <div class="section-header">
+      <h2>Recent Workflow Runs</h2>
+    </div>
+    <div class="table-shell">
+      <table>
+        <thead>
+          <tr>
+            <th>Run ID</th>
+            <th>Workflow</th>
+            <th>Status</th>
+            <th>Step</th>
+            <th>Tokens</th>
+            <th>Cost (USD)</th>
+            <th>Live SSE</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if runs %}
+          {% for run in runs %}
+          {% set r_uuid = run.run_id | string %}
+          <tr>
+            <td>
+              <span class="uuid-pill" title="{{ run.run_id }}">
+                <span>{{ r_uuid[:8] }}…</span>
+                <code class="uuid-full-sr">{{ run.run_id }}</code>
+                <button
+                  type="button"
+                  class="copy-btn"
+                  onclick="copyUuid('{{ run.run_id }}', this)"
+                  title="Copy full Run UUID"
+                >Copy</button>
+              </span>
+            </td>
+            <td class="workflow-name">{{ run.workflow_name }}</td>
+            <td>
+              <span class="badge badge-{{ run.status.value }}">
+                <span class="badge-dot"></span>
+                {{ run.status.value }}
+              </span>
+            </td>
+            <td class="mono-cell">{{ run.current_step_index }}</td>
+            <td class="mono-cell">{{ run.total_input_tokens + run.total_output_tokens }}</td>
+            <td class="mono-cell">${{ "%.4f"|format(run.total_cost_usd) }}</td>
+            <td>
+              <a
+                href="/api/v1/runs/{{ run.run_id }}/stream"
+                class="btn btn-stream"
+                onclick="openSseDrawer('{{ run.run_id }}', '{{ run.workflow_name }}'); return false;"
+                title="Open in-page Live SSE Event Terminal"
+              >
+                ● Watch Live
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+          {% else %}
+          <tr>
+            <td colspan="7" class="empty-state">
+              No workflow runs recorded yet. Trigger a run via CLI or <code>POST /api/v1/runs</code>.
+            </td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+
+  <!-- Collapsible Live SSE Event Terminal Drawer -->
+  <aside id="sse-drawer" class="sse-drawer" aria-label="Live SSE Event Terminal">
+    <div class="sse-drawer-header">
+      <div class="sse-title-bar">
+        <span class="pulse-dot" id="sse-status-dot"></span>
+        <strong>Live SSE Event Terminal</strong>
+        <span id="sse-active-run-label" style="color: var(--text-secondary);">No stream selected</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button type="button" class="btn" onclick="clearSseTerminal()">Clear</button>
+        <button type="button" class="btn" onclick="closeSseDrawer()">✕ Close</button>
+      </div>
+    </div>
+    <div id="sse-log-body" class="sse-log-body"></div>
+  </aside>
+
+  <script>
+    window.runlatchAutoRefresh = false;
+    let activeEventSource = null;
+
+    function copyUuid(fullUuid, btnEl) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(fullUuid);
+      }
+      const prev = btnEl.textContent;
+      btnEl.textContent = "Copied";
+      btnEl.classList.add("copied");
+      setTimeout(function () {
+        btnEl.textContent = prev;
+        btnEl.classList.remove("copied");
+      }, 1300);
+    }
+
+    function toggleAutoRefresh() {
+      window.runlatchAutoRefresh = !window.runlatchAutoRefresh;
+      const btn = document.getElementById("auto-refresh-btn");
+      const ind = document.getElementById("auto-refresh-indicator");
+      if (window.runlatchAutoRefresh) {
+        btn.classList.add("active");
+        ind.textContent = "●";
+      } else {
+        btn.classList.remove("active");
+        ind.textContent = "○";
+      }
+    }
+
+    function triggerDashboardRefresh() {
+      if (window.htmx) {
+        window.htmx.ajax("GET", "/ui", {
+          target: "#dashboard-body",
+          select: "#dashboard-body",
+          swap: "outerHTML",
+        });
+      } else {
+        window.location.reload();
+      }
+    }
+
+    function appendSseEvent(eventType, rawData) {
+      const container = document.getElementById("sse-log-body");
+      const row = document.createElement("div");
+      row.className = "sse-line";
+
+      const ts = document.createElement("span");
+      ts.className = "sse-ts";
+      ts.textContent = new Date().toLocaleTimeString();
+
+      const tag = document.createElement("span");
+      tag.className = "sse-evt-tag";
+      tag.textContent = eventType;
+
+      const payload = document.createElement("span");
+      payload.className = "sse-payload";
+      try {
+        const parsed = JSON.parse(rawData);
+        payload.textContent = JSON.stringify(parsed, null, 2);
+      } catch (_err) {
+        payload.textContent = rawData;
+      }
+
+      row.appendChild(ts);
+      row.appendChild(tag);
+      row.appendChild(payload);
+      container.appendChild(row);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function clearSseTerminal() {
+      const container = document.getElementById("sse-log-body");
+      container.innerHTML = "";
+    }
+
+    function openSseDrawer(runId, workflowName) {
+      if (activeEventSource) {
+        activeEventSource.close();
+        activeEventSource = null;
+      }
+      const drawer = document.getElementById("sse-drawer");
+      const label = document.getElementById("sse-active-run-label");
+      const dot = document.getElementById("sse-status-dot");
+      drawer.classList.add("open");
+      clearSseTerminal();
+      label.textContent = workflowName + " (" + runId.slice(0, 8) + "…)";
+      dot.style.background = "#34d399";
+
+      const url = "/api/v1/runs/" + encodeURIComponent(runId) + "/stream";
+      appendSseEvent("connect", "Subscribing to " + url + " ...");
+
+      const source = new EventSource(url);
+      activeEventSource = source;
+
+      ["snapshot", "step", "tool_call", "status", "approval", "done", "error"].forEach(function (evtName) {
+        source.addEventListener(evtName, function (e) {
+          appendSseEvent(evtName, e.data || "");
+          if (evtName === "done") {
+            dot.style.background = "#38bdf8";
+            source.close();
+          }
+        });
+      });
+
+      source.onmessage = function (e) {
+        appendSseEvent("message", e.data || "");
+      };
+
+      source.onerror = function () {
+        appendSseEvent("closed", "SSE stream closed or completed.");
+        dot.style.background = "#71717a";
+        source.close();
+      };
+    }
+
+    function closeSseDrawer() {
+      if (activeEventSource) {
+        activeEventSource.close();
+        activeEventSource = null;
+      }
+      document.getElementById("sse-drawer").classList.remove("open");
+    }
+  </script>
 </body>
 </html>
